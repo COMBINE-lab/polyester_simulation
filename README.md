@@ -1,10 +1,28 @@
-# Locations of starting files
+# To fetch the source files 
 
-* `isoforms.results.out`
-* `reference.fa`
-* `reference.gtf`
-* `reference.sqlite`
-* `fitpar_all.rda`
+The files used as input for the simulation exceed the 
+size allowed in a Github repository.  They can be fetched 
+using the `fetch_from_zenodo.sh` script.  To fetch the files, 
+exectute the command:
+
+```
+bash fetch_from_zenodo.sh -c simsrc
+```
+
+Note, the full set of simulated reads is also hosted on Zenodo, and
+those can be fetched with the command:
+
+```
+bash fetch_from_zenodo.sh -c simres
+```
+
+These files total ~55G, so downloading them might take a while.
+You can fetch both the source and result files for the simulation
+with:
+
+```
+bash fetch_from_zenodo.sh -c both 
+```
 
 ---
 
