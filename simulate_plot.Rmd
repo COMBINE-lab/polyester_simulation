@@ -1,7 +1,5 @@
 # Fragment bias simulation accuracy and sensitivity vs. FDR
 
-July 5, 2016
-
 <!-- build with: library(knitr); knit2html("simulate_plot.Rmd") -->
 
 First load some data and libraries.
