@@ -1,0 +1,264 @@
+# Fragment bias simulation accuracy and sensitivity vs. FDR
+
+July 5, 2016
+
+<!-- build with: library(knitr); knit2html("simulate_plot.Rmd") -->
+
+First load some data and libraries.
+
+```{r}
+load("simulate.rda")
+library(tximport)
+library(readr)
+library(Biostrings)
+```
+
+Here we load the counts *before* discarding fragments from GC bias.
+These give us unbiased TPM.
+
+```{r}
+fasta <- "reference.fa"
+txseq <- readDNAStringSet(fasta)
+# only those transcripts that were simulated
+load(paste0("out/out_1/sim_counts_matrix.rda"))
+sub.cts <- matrix(NA,nrow=nrow(counts_matrix),ncol=16)
+for (i in 1:8) {
+  load(paste0("out/out_",i,"/sim_counts_matrix.rda"))
+  sub.cts[,c(i,i+8)] <- counts_matrix
+}
+rownames(sub.cts) <- rownames(counts_matrix)
+# all transcripts in the FASTA
+cts <- matrix(0,nrow=length(txseq),ncol=16)
+rownames(cts) <- names(txseq)
+cts[match(rownames(sub.cts),rownames(cts)),] <- sub.cts
+# now calculate gold standard TPMs
+gold <- cts
+frag.length <- 200 # needs to match with simulate_reads.R
+for (i in 1:16) {
+  gold[,i] <- cts[,i] / pmax(width(txseq) - frag.length + 1, 1)
+}
+gold <- sweep(gold, 2, 1e6/colSums(gold), `*`)
+```
+
+# Import quantifications
+
+```{r message=FALSE}
+n <- 8 # samples per group
+dirs <- paste0("out/out_",rep(1:n,2),"/sample_0",rep(1:2,each=n))
+tpm <- list()
+meths <- c("Salmon", "Salmon (a)", "kallisto", "eXpress")
+dir.type <- c(Salmon="salmon", "Salmon (a)"="salmon_align", kallisto="kallisto")
+file.type <- c(Salmon="quant.sf", "Salmon (a)"="quant.sf", kallisto="abundance.tsv")
+type <- c(Salmon="salmon", "Salmon (a)"="salmon", kallisto="kallisto")
+for (m in meths) {
+  if (m %in% c("Salmon", "Salmon (a)", "kallisto")) {
+     tpm[[m]] <- tximport(file.path(dirs,dir.type[m],file.type[m]),
+                       type=type[m],
+                       txOut=TRUE,
+                       reader=read_tsv)$abundance
+  }else{
+     expressFiles <- file.path(dirs, "express", "results.xprs")
+     express <- simplify2array(lapply(expressFiles, 
+                            function(x) { t <- read_tsv(x); t.ord <- t[match(names(tpm[[meths[1]]][,1]), as.character(t$target_id)),]; t.ord$tpm }) )
+     tpm[[meths[4]]] <- express
+     row.names(tpm[[meths[4]]]) <- row.names(tpm[[meths[1]]])
+
+  }
+}
+tpm0 <- tpm
+```
+
+# De-trending
+
+Due to the down-sampling of reads for the two groups in the simulation
+there is a large global trend across estimated TPMs and the "gold"
+TPMs estimated from counts before down-sampling.  We therefore
+de-trend the TPMs for each method with a single scalar factor as in
+Teng (2016).
+
+```{r}
+tpm <- tpm0
+idx <- rowSums(gold) > 10
+gold.mid1 <- median(apply(gold[idx,1:n], 2, median))
+gold.mid2 <- median(apply(gold[idx,(n+1):(2*n)], 2, median))
+for (m in meths) {
+  mid1 <- median(apply(tpm[[m]][idx,1:n], 2, median))
+  mid2 <- median(apply(tpm[[m]][idx,(n+1):(2*n)], 2, median))
+  tpm[[m]][,1:n] <- tpm[[m]][,1:n] / mid1 * gold.mid1
+  tpm[[m]][,(n+1):(2*n)] <- tpm[[m]][,(n+1):(2*n)] / mid2 * gold.mid2
+}
+```
+
+# Accuracy
+
+The following functions are used to assess median absolute error and
+plot the fold change of estimate / truth over truth.
+
+```{r, dpi=150}
+errfun_mae <- function(x,y,pc=1) {
+  idx <- x > pc
+  x2 <- log2(x[idx] + pc)
+  y2 <- log2(y[idx] + pc)
+  median( abs(x2 - y2), na.rm=TRUE )
+}
+myScatter <- function(x,y,algo,pc=1,xmax=3,xlab="log10(TPM)",ylab="") {
+  err <- as.data.frame(log2(y+pc)-log2(x+pc))
+  colnames(err) <- 'val'
+  err$col[abs(err$val) > 0.5] <- rgb(0.8, 0.0, 0.0, 0.1)
+  err$col[abs(err$val) <= 0.5] <- rgb(0, 0, 0, 0.1)
+
+  out <-  sum(abs(err$val[x>0]) > 0.5)
+  fout <- out / sum(x > 0)
+  
+  plot(log10(x+pc),log2(y+pc)-log2(x+pc),
+       xlim=c(log10(pc),5),ylim=c(-2,2),
+       main=algo,xlab=xlab,ylab=ylab,cex=.6,pch=16,col=err$col)
+  abline(h=0,col="red",lwd=1)
+  usr <- par( "usr" )
+  efrac <- sprintf("%.3f", fout)
+  legend("topright", legend=efrac, text.col="red", bty="n")
+}
+```
+
+In this grid of plots, the first row is the "good" samples,
+the second row is using the parameters for the sequencing
+center which has more fragment GC content bias.
+
+```{r, fig.width=10, dpi=150}
+par(mfrow=c(2,4), mar=c(5,2,3,0))
+for (i in c(1,9)) {
+  myScatter(gold[,i], tpm[["Salmon"]][,i], "Salmon")
+  myScatter(gold[,i], tpm[["Salmon (a)"]][,i], "Salmon (a)")
+  myScatter(gold[,i], tpm[["kallisto"]][,i], "kallisto")
+  myScatter(gold[,i], tpm[["eXpress"]][,i], "eXpress")
+}
+```
+
+Now plot the median absolute error (y-axis of previous plot) for
+8 samples from "good" sequencing center and 8 samples from
+"bad" sequencing center.
+
+```{r kable}
+err <- lapply(0:1, function(j) {
+         lapply(meths, function(m) {
+           sapply(1:n, function(i) {
+             errfun_mae(gold[,i + j*n], tpm[[m]][,i + j*n])
+                })
+              })
+            })
+err <- do.call(c, err)
+head <- paste(rep(meths, 2), rep(c("low", "high"), each=4))
+tdat <- as.data.frame(unlist(lapply(err, mean)), row.names=head)
+colnames(tdat) <- "Mean MAE"
+kable(t(tdat), format="html", digits=4, table.attr='class="flat-table"')
+```
+
+
+```{r, dpi=150, fig.width=8, fig.height=9}
+library(RColorBrewer)
+palette(brewer.pal(4,"Set1"))
+par(mfrow=c(1,1),mar=c(7,5,1,1))
+cols <- c(seq_along(meths),seq_along(meths))
+par(mar=c(9,8,1,1))   # extra large bottom margin
+boxplot(err, ylab="median( | log2(estimate/truth) | )",
+        las=3, range=0, border=cols, names=rep(meths,2), ylim=c(0, 0.25), cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+for (i in 1:(2*length(meths))) points(runif(n,i-.1,i+.1), err[[i]], col=cols[i])
+abline(v = length(meths) + .5, col="gray")
+```
+
+# curves
+
+Load the true fold changes and define t-test functions
+
+```{r, dpi=150}
+gold.de <- numeric(length(txseq))
+names(gold.de) <- names(txseq)
+gold.de[rownames(fold_changes)] <- log2(fold_changes[,2])
+condition <- factor(rep(1:2, each=n))
+design <- model.matrix(~ condition)
+library(limma)
+# this function uses limma's lmFit for speed
+# it performs simple t-tests, not moderated t-statistics / ebayes methods
+ttests <- function(x, design, pc=1, coef=ncol(design)) {
+  # correct for global shift across condition due to different library size
+  sf <- exp(median(log(rowSums(x[,1:n]) / rowSums(x[,(n+1):(2*n)])), na.rm=TRUE))
+  x[,(n+1):(2*n)] <- sf * x[,(n+1):(2*n)]
+  fit <- lmFit(log2(x + pc), design)
+  ordinary.t <- fit$coef / fit$stdev.unscaled / fit$sigma
+  pvals <- 2*pt(abs(ordinary.t[,coef]), df=ncol(x)-ncol(design), lower.tail=FALSE)
+  data.frame(dm=fit$coef[,coef], pvalues=pvals)
+}
+```
+
+Do t-tests on log2 TPMs plus a pseudocount.
+
+```{r}
+tlist <- list()
+mlist <- list()
+tlist[["gold"]] <- ttests(gold, design)
+for (m in meths) {
+  tlist[[m]] <- ttests(tpm[[m]], design)
+  mlist[[m]] <- tlist[[m]]
+}
+```
+
+Sanity check: boxplots of estimated log2 fold change over true log2 fold change 
+
+```{r, dpi=150}
+par(mfrow=c(1,2), mar=c(5,5,1,1))
+for (m in c("gold",meths)) {
+  boxplot(tlist[[m]]$dm ~ gold.de, main=m)
+  abline(h=-1:1, col="red")
+}
+```
+
+Define a function for drawing sensitivity vs precision curves.
+
+```{r, dpi=150}
+sensPrecCurve <- function(tlist, gold.de, xlim=c(0,1), ylim=c(0,1), ...) {
+  for (i in seq_along(tlist)) {
+    ps <- 10^seq(from=-20, to=0, length=100)
+    tpr <- sapply(ps, function(p) mean(tlist[[i]]$pvalues[gold.de != 0] < p, na.rm=TRUE))
+    fdr <- sapply(ps, function(p) mean(gold.de[tlist[[i]]$pvalues < p] == 0, na.rm=TRUE))
+    if (i == 1) {
+      plot(fdr, tpr, type="l", xlim=xlim, ylim=ylim,
+           cex=1.5, pch=20, col=i, lwd=4, ...)
+    } else {
+      points(fdr, tpr, type="l", cex=1.5, pch=20, col=i, lwd=4)
+    }
+  }
+}
+```
+
+```{r, dpi=150}
+par(mfrow=c(1,1))
+sensPrecCurve(mlist, gold.de,
+         xlab="False Discovery Rate",
+         ylab="Sensitivity", cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+legend("bottomright", names(mlist),
+       col=c(1:4),lwd=4, cex=1.5, inset=.05)
+```
+
+Obtain the maximum sensitivity value for a given obtained FDR cutoff:
+
+```{r}
+maxSensForPrec <- function(tlist, gold.de, thresholds=c(.01,.05,.1)) {
+  m <- matrix(NA, ncol=length(tlist), nrow=length(thresholds))
+  for (i in seq_along(thresholds)) {
+    for (j in seq_along(tlist)) {
+      ps <- rev(10^seq(from=-20, to=0, length=100))
+      tpr <- sapply(ps, function(p) mean(tlist[[j]]$pvalues[gold.de != 0] < p, na.rm=TRUE))
+      fdr <- sapply(ps, function(p) mean(gold.de[tlist[[j]]$pvalues < p] == 0, na.rm=TRUE))
+      m[i,j] <- tpr[which(fdr < thresholds[i])[1]]
+    }
+  }
+  rownames(m) <- as.character(thresholds)
+  colnames(m) <- names(tlist)
+  m
+}
+```
+
+```{r}
+maxSens <- maxSensForPrec(tlist, gold.de)
+kable(maxSens, format="html", digits=4, table.attr='class="flat-table"')
+```
