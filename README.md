@@ -47,3 +47,6 @@ How to run `simulate_reads.R` in parallel. This requires on my cluster
 seq 8 | parallel -j 8 Rscript --vanilla simulate_reads.R {}
 ```
 
+# Analyzing results
+
+The script `simulate_plot.Rmd` is an R Markdown file that contains the code used to analyze the results of quantification on the simulated data.  It computes a number of metrics and generates an html output file `simulate_plot.html` that can be viewed in a web browser.  To run the markdown file, one can use the command `knit2html('simulate_plot.Rmd')` from within the directory containing this file.  The resulting html file will be written to the same directory.
