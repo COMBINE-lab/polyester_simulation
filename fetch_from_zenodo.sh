@@ -22,7 +22,7 @@ fi
 echo "downloading samples 1-4"
 wget https://zenodo.org/record/580776/files/out1_4.tar.gz
 echo -e "done\ndownloading samples 1-4"
-wget https://zenodo.org/record/580776/files/out5_8.tar.gz
+wget https://zenodo.org/record/580774/files/out5_8.tar.gz
 echo -e "done\nextracting samples"
 tar xzvf out1_4.tar.gz
 tar xzvf out5_8.tar.gz
